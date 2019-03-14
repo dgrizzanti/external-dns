@@ -85,6 +85,7 @@ type Controller struct {
 // RunOnce runs a single iteration of a reconciliation loop.
 func (c *Controller) RunOnce() error {
 	records, err := c.Registry.Records()
+	log.Info(records)
 	if err != nil {
 		registryErrors.Inc()
 		return err
@@ -94,6 +95,7 @@ func (c *Controller) RunOnce() error {
 	ctx := context.WithValue(context.Background(), provider.RecordsContextKey, records)
 
 	endpoints, err := c.Source.Endpoints()
+	log.Info(endpoints)
 	if err != nil {
 		sourceErrors.Inc()
 		return err

@@ -20,10 +20,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/vinyldns/go-vinyldns/vinyldns"
 	"github.com/kubernetes-incubator/external-dns/endpoint"
 	"github.com/kubernetes-incubator/external-dns/plan"
 	log "github.com/sirupsen/logrus"
+	"github.com/vinyldns/go-vinyldns/vinyldns"
 )
 
 type vinyldnsZoneInterface interface {
@@ -41,6 +41,7 @@ type vinyldnsChange struct {
 	Action string
 }
 
+// NewVinylDNSProvider does blah
 func NewVinylDNSProvider(zoneFilter ZoneIDFilter, dryRun bool) (Provider, error) {
 	_, ok := os.LookupEnv("VINYLDNS_ACCESS_KEY")
 	if !ok {
@@ -76,17 +77,23 @@ func (p *vinyldnsProvider) Records() (endpoints []*endpoint.Endpoint, _ error) {
 
 		for _, r := range records {
 			if supportedRecordType(string(r.Type)) {
-				name := fmt.Sprintf("%s.%s", r.Name, zone.Name)
+				recordsCount := len(r.Records)
+				log.Infof(fmt.Sprintf("%s.%s.%d.%s", r.Name, r.Type, recordsCount, zone.Name))
 
-				// root name is identified by the empty string and should be
-				// translated to zone name for the endpoint entry.
-				if r.Name == "" {
-					name = zone.Name
+				if len(r.Records) > 0 {
+					targets := make([]string, len(r.Records))
+					for idx, rr := range r.Records {
+						switch r.Type {
+						case "CNAME":
+							log.Infof(rr.CName)
+							targets[idx] = rr.CName
+						case "A":
+							log.Infof(rr.Address)
+							targets[idx] = rr.Address
+						}
+					}
+					endpoints = append(endpoints, endpoint.NewEndpointWithTTL(r.Name, string(r.Type), endpoint.TTL(r.TTL), targets...))
 				}
-
-				log.Infof(r.Name)
-
-				endpoints = append(endpoints, endpoint.NewEndpointWithTTL(name, string(r.Type), endpoint.TTL(r.TTL), "1.1.1.1"))
 			}
 		}
 	}

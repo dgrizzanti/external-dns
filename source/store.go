@@ -94,6 +94,7 @@ func (p *SingletonClientGenerator) IstioClient() (istiomodel.ConfigStore, error)
 	var err error
 	p.istioOnce.Do(func() {
 		p.istioClient, err = NewIstioClient(p.KubeConfig)
+		// func NewClient(config string,ring) (*Client, error) {
 	})
 	return p.istioClient, err
 }
