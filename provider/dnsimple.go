@@ -216,6 +216,7 @@ func newDnsimpleChange(action string, e *endpoint.Endpoint) *dnsimpleChange {
 // newDnsimpleChanges returns a slice of changes based on given action and record
 func newDnsimpleChanges(action string, endpoints []*endpoint.Endpoint) []*dnsimpleChange {
 	changes := make([]*dnsimpleChange, 0, len(endpoints))
+
 	for _, e := range endpoints {
 		changes = append(changes, newDnsimpleChange(action, e))
 	}

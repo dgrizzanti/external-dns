@@ -78,11 +78,13 @@ func (im *TXTRegistry) Records() ([]*endpoint.Endpoint, error) {
 	labelMap := map[string]endpoint.Labels{}
 
 	for _, record := range records {
+		log.Infof("record %s", record)
 		if record.RecordType != endpoint.RecordTypeTXT {
 			endpoints = append(endpoints, record)
 			continue
 		}
 		// We simply assume that TXT records for the registry will always have only one target.
+		log.Infof("targets %s", record.Targets)
 		labels, err := endpoint.NewLabelsFromString(record.Targets[0])
 		if err == endpoint.ErrInvalidHeritage {
 			//if no heritage is found or it is invalid

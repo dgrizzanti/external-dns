@@ -19,6 +19,7 @@ package provider
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/kubernetes-incubator/external-dns/endpoint"
 	"github.com/kubernetes-incubator/external-dns/plan"
@@ -26,9 +27,21 @@ import (
 	"github.com/vinyldns/go-vinyldns/vinyldns"
 )
 
+const (
+	vinyldnsCreate = "CREATE"
+	vinyldnsDelete = "DELETE"
+	vinyldnsUpdate = "UPDATE"
+
+	vinyldnsRecordTTL = 300
+)
+
 type vinyldnsZoneInterface interface {
 	Zones() ([]vinyldns.Zone, error)
 	RecordSets(id string) ([]vinyldns.RecordSet, error)
+	RecordSet(zoneID, recordSetID string) (vinyldns.RecordSet, error)
+	RecordSetCreate(zoneID string, rs *vinyldns.RecordSet) (*vinyldns.RecordSetUpdateResponse, error)
+	RecordSetUpdate(zoneID, recordSetID string, rs *vinyldns.RecordSet) (*vinyldns.RecordSetUpdateResponse, error)
+	RecordSetDelete(zoneID, recordSetID string) (*vinyldns.RecordSetUpdateResponse, error)
 }
 
 type vinyldnsProvider struct {
@@ -38,7 +51,8 @@ type vinyldnsProvider struct {
 }
 
 type vinyldnsChange struct {
-	Action string
+	Action            string
+	ResourceRecordSet vinyldns.RecordSet
 }
 
 // NewVinylDNSProvider does blah
@@ -65,7 +79,6 @@ func (p *vinyldnsProvider) Records() (endpoints []*endpoint.Endpoint, _ error) {
 	}
 
 	for _, zone := range zones {
-		log.Infof(zone.Name + " " + zone.ID)
 		if !p.zoneFilter.Match(zone.ID) {
 			continue
 		}
@@ -78,21 +91,21 @@ func (p *vinyldnsProvider) Records() (endpoints []*endpoint.Endpoint, _ error) {
 		for _, r := range records {
 			if supportedRecordType(string(r.Type)) {
 				recordsCount := len(r.Records)
-				log.Infof(fmt.Sprintf("%s.%s.%d.%s", r.Name, r.Type, recordsCount, zone.Name))
+				log.Debugf(fmt.Sprintf("%s.%s.%d.%s", r.Name, r.Type, recordsCount, zone.Name))
 
+				//TODO: A and AAAA Records
 				if len(r.Records) > 0 {
 					targets := make([]string, len(r.Records))
 					for idx, rr := range r.Records {
 						switch r.Type {
 						case "CNAME":
-							log.Infof(rr.CName)
 							targets[idx] = rr.CName
-						case "A":
-							log.Infof(rr.Address)
-							targets[idx] = rr.Address
+						case "TXT":
+							targets[idx] = rr.Text
 						}
 					}
-					endpoints = append(endpoints, endpoint.NewEndpointWithTTL(r.Name, string(r.Type), endpoint.TTL(r.TTL), targets...))
+
+					endpoints = append(endpoints, endpoint.NewEndpointWithTTL(r.Name+"."+zone.Name, string(r.Type), endpoint.TTL(r.TTL), targets...))
 				}
 			}
 		}
@@ -101,16 +114,143 @@ func (p *vinyldnsProvider) Records() (endpoints []*endpoint.Endpoint, _ error) {
 	return endpoints, nil
 }
 
+func vinyldnsSuitableZone(hostname string, zones []vinyldns.Zone) *vinyldns.Zone {
+	var zone *vinyldns.Zone
+	for _, z := range zones {
+		log.Debugf("hostname: %s and zoneName: %s", hostname, z.Name)
+		// Adding a . as vinyl appends it to each zone record
+		if strings.HasSuffix(hostname+".", z.Name) {
+			if zone == nil || len(z.Name) > len(zone.Name) {
+				newZ := z
+				zone = &newZ
+			}
+		}
+	}
+	return zone
+}
+
 func (p *vinyldnsProvider) submitChanges(changes []*vinyldnsChange) error {
 	if len(changes) == 0 {
 		log.Infof("All records are already up to date")
 		return nil
 	}
+
+	zones, err := p.client.Zones()
+	if err != nil {
+		return err
+	}
+
+	for _, change := range changes {
+		zone := vinyldnsSuitableZone(change.ResourceRecordSet.Name, zones)
+		if zone == nil {
+			log.Debugf("Skipping record %s because no hosted zone matching record DNS Name was detected ", change.ResourceRecordSet.Name)
+			continue
+		}
+
+		change.ResourceRecordSet.Name = strings.TrimSuffix(change.ResourceRecordSet.Name+".", "."+zone.Name)
+		change.ResourceRecordSet.ZoneID = zone.ID
+		log.Infof("Changing records: %s %v in zone: %s", change.Action, change.ResourceRecordSet, zone.Name)
+
+		if !p.dryRun {
+			switch change.Action {
+			case vinyldnsCreate:
+				_, err := p.client.RecordSetCreate(zone.ID, &change.ResourceRecordSet)
+				if err != nil {
+					return err
+				}
+			case vinyldnsUpdate:
+				recordID, err := p.findRecordSetID(zone.ID, change.ResourceRecordSet.Name)
+				if err != nil {
+					return err
+				}
+				change.ResourceRecordSet.ID = recordID
+				_, err = p.client.RecordSetUpdate(zone.ID, recordID, &change.ResourceRecordSet)
+				if err != nil {
+					return err
+				}
+			case vinyldnsDelete:
+				recordID, err := p.findRecordSetID(zone.ID, change.ResourceRecordSet.Name)
+				if err != nil {
+					return err
+				}
+				_, err = p.client.RecordSetDelete(zone.ID, recordID)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
+func (p *vinyldnsProvider) findRecordSetID(zoneID string, recordSetName string) (recordID string, err error) {
+	records, err := p.client.RecordSets(zoneID)
+	if err != nil {
+		return "", err
+	}
+
+	for _, r := range records {
+		if r.Name == recordSetName {
+			return r.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("Record not found")
+}
+
 func (p *vinyldnsProvider) ApplyChanges(changes *plan.Changes) error {
-	combinedChanges := make([]*vinyldnsChange, 0)
+	combinedChanges := make([]*vinyldnsChange, 0, len(changes.Create)+len(changes.UpdateNew)+len(changes.Delete))
+
+	combinedChanges = append(combinedChanges, newVinylDNSChanges(vinyldnsCreate, changes.Create)...)
+	combinedChanges = append(combinedChanges, newVinylDNSChanges(vinyldnsUpdate, changes.UpdateNew)...)
+	combinedChanges = append(combinedChanges, newVinylDNSChanges(vinyldnsDelete, changes.Delete)...)
 
 	return p.submitChanges(combinedChanges)
+}
+
+// newVinylDNSChanges returns a collection of Changes based on the given records and action.
+func newVinylDNSChanges(action string, endpoints []*endpoint.Endpoint) []*vinyldnsChange {
+	changes := make([]*vinyldnsChange, 0, len(endpoints))
+
+	for _, e := range endpoints {
+		changes = append(changes, newVinylDNSChange(action, e))
+	}
+
+	return changes
+}
+
+func newVinylDNSChange(action string, endpoint *endpoint.Endpoint) *vinyldnsChange {
+	var ttl = vinyldnsRecordTTL
+	if endpoint.RecordTTL.IsConfigured() {
+		ttl = int(endpoint.RecordTTL)
+	}
+
+	records := []vinyldns.Record{}
+
+	// TODO: A and AAAA
+	if endpoint.RecordType == "CNAME" {
+		records = []vinyldns.Record{
+			{
+				CName: endpoint.Targets[0],
+			},
+		}
+	} else if endpoint.RecordType == "TXT" {
+		records = []vinyldns.Record{
+			{
+				Text: endpoint.Targets[0],
+			},
+		}
+	}
+
+	change := &vinyldnsChange{
+		Action: action,
+		ResourceRecordSet: vinyldns.RecordSet{
+			Name:    endpoint.DNSName,
+			Type:    endpoint.RecordType,
+			TTL:     ttl,
+			Records: records,
+		},
+	}
+	return change
 }
