@@ -260,6 +260,11 @@ func (cfg *Config) ParseFlags(args []string) error {
 	app.Flag("cf-username", "The username to log into the cloud foundry API").Default(defaultConfig.CFUsername).StringVar(&cfg.CFUsername)
 	app.Flag("cf-password", "The password to log into the cloud foundry API").Default(defaultConfig.CFPassword).StringVar(&cfg.CFPassword)
 
+	// Flags related to cloud foundry
+	app.Flag("cf-api-endpoint", "The fully-qualified domain name of the cloud foundry instance you are targeting").Default(defaultConfig.CFAPIEndpoint).StringVar(&cfg.CFAPIEndpoint)
+	app.Flag("cf-username", "The username to log into the cloud foundry API").Default(defaultConfig.CFUsername).StringVar(&cfg.CFUsername)
+	app.Flag("cf-password", "The password to log into the cloud foundry API").Default(defaultConfig.CFPassword).StringVar(&cfg.CFPassword)
+
 	// Flags related to processing sources
 	app.Flag("source", "The resource types that are queried for endpoints; specify multiple times for multiple sources (required, options: service, ingress, fake, connector, istio-gateway, cloudfoundry, crd, empty").Required().PlaceHolder("source").EnumsVar(&cfg.Sources, "service", "ingress", "istio-gateway", "cloudfoundry", "fake", "connector", "crd", "empty")
 	app.Flag("namespace", "Limit sources of endpoints to a specific namespace (default: all namespaces)").Default(defaultConfig.Namespace).StringVar(&cfg.Namespace)

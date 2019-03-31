@@ -39,12 +39,7 @@ func (rs *routeSource) Endpoints() ([]*endpoint.Endpoint, error) {
 	endpoints := []*endpoint.Endpoint{}
 
 	domains, _ := rs.client.ListDomains()
-	// cfDomain := "elements.capsps.comcast.net"
 	for _, domain := range domains {
-		// if domain.Name == cfDomain {
-		// 	domainGUID = domain.Guid
-		// }
-
 		q := url.Values{}
 		q.Set("q", "domain_guid:"+domain.Guid)
 		routes, _ := rs.client.ListRoutesByQuery(q)
