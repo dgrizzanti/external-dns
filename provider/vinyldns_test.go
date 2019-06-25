@@ -19,61 +19,140 @@ package provider
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"github.com/vinyldns/go-vinyldns/vinyldns"
 )
 
-var mockVinylDNSProvider vinyldnsProvider
-var vinyldnsListZonesResponse []vinyldns.Zone
-
-type mockVinylDNSServiceInterface struct {
+type mockVinyldnsZoneInterface struct {
 	mock.Mock
 }
 
+var mockVinylDNSProvider vinyldnsProvider
+
+var vinylDNSZones []vinyldns.Zone
+var vinylDNSRecords []vinyldns.RecordSet
+var vinylDNSRecordSetUpdateResponse *vinyldns.RecordSetUpdateResponse
+
 func TestVinylDNSServices(t *testing.T) {
-	// Setup example responses
 	firstZone := vinyldns.Zone{
-		ID:   "1",
+		ID:   "0",
 		Name: "example.com",
 	}
 	secondZone := vinyldns.Zone{
-		ID:   "2",
+		ID:   "1",
 		Name: "example-beta.com",
 	}
-	vinyldnsListZonesResponse = []vinyldns.Zone{firstZone, secondZone}
+	vinylDNSZones = []vinyldns.Zone{firstZone, secondZone}
 
-	// Setup mock services
-	mockDNS := &mockVinylDNSServiceInterface{}
-	mockDNS.On("Zones").Return(&vinyldnsListZonesResponse, nil)
-	mockDNS.On("RecordSet", "1").Return(&vinyldnsListZonesResponse, nil)
-	mockDNS.On("RecordSets", "1").Return(&vinyldnsListZonesResponse, nil)
-	mockDNS.On("RecordSetCreate", "1").Return(&vinyldnsListZonesResponse, nil)
-	mockDNS.On("RecordSetUpdate", "1").Return(&vinyldnsListZonesResponse, nil)
-	mockDNS.On("RecordSetDelete", "1").Return(&vinyldnsListZonesResponse, nil)
+	firstRecord := vinyldns.RecordSet{
+		ID:     "1",
+		ZoneID: "example.com",
+		Name:   "example",
+		TTL:    3600,
+		Type:   "CNAME",
+	}
+	vinylDNSRecords = []vinyldns.RecordSet{firstRecord}
 
-	mockVinylDNSProvider = vinyldnsProvider{client: mockDNS}
+	mockVinylDNS := &mockVinyldnsZoneInterface{}
+	mockVinylDNS.On("Zones").Return(vinylDNSZones, nil)
+	mockVinylDNS.On("RecordSets").Return(vinylDNSRecords, nil)
+
+	mockVinylDNSProvider = vinyldnsProvider{client: mockVinylDNS}
+
+	// Run tests on mock services
+	t.Run("Zones", testVinylDNSProviderZones)
+	t.Run("Records", testVinylDNSProviderRecords)
+	// t.Run("ApplyChanges", testDnsimpleProviderApplyChanges)
+	// t.Run("ApplyChanges/SkipUnknownZone", testDnsimpleProviderApplyChangesSkipsUnknown)
+	// t.Run("SuitableZone", testDnsimpleSuitableZone)
+	// t.Run("GetRecordID", testDnsimpleGetRecordID
 }
 
-func (_m *mockVinylDNSServiceInterface) Zones() ([]vinyldns.Zone, error) {
-	return nil, nil
+func testVinylDNSProviderZones(t *testing.T) {
+	result, err := mockVinylDNSProvider.client.Zones()
+	assert.Nil(t, err)
+	validateVinylDNSZones(t, result, vinylDNSZones)
 }
 
-func (_m *mockVinylDNSServiceInterface) RecordSets(id string) ([]vinyldns.RecordSet, error) {
-	return nil, nil
+func testVinylDNSProviderRecords(t *testing.T) {
+	mockVinylDNSProvider.zoneFilter = NewZoneIDFilter([]string{"1"})
+	result, err := mockVinylDNSProvider.Records()
+	assert.Nil(t, err)
+	assert.Equal(t, len(vinylDNSRecords), len(result))
 }
 
-func (_m *mockVinylDNSServiceInterface) RecordSet(zoneID, recordSet string) (vinyldns.RecordSet, error) {
-	return vinyldns.RecordSet{}, nil
+func validateVinylDNSZones(t *testing.T, zones []vinyldns.Zone, expected []vinyldns.Zone) {
+	require.Len(t, zones, len(expected))
+
+	for i, v := range expected {
+		assert.Equal(t, zones[i].Name, v.Name)
+	}
 }
 
-func (_m *mockVinylDNSServiceInterface) RecordSetCreate(zoneID string, rs *vinyldns.RecordSet) (*vinyldns.RecordSetUpdateResponse, error) {
-	return nil, nil
+func (m *mockVinyldnsZoneInterface) Zones() ([]vinyldns.Zone, error) {
+	args := m.Called()
+	var r0 []vinyldns.Zone
+
+	if args.Get(0) != nil {
+		r0 = args.Get(0).([]vinyldns.Zone)
+	}
+
+	return r0, args.Error(1)
 }
 
-func (_m *mockVinylDNSServiceInterface) RecordSetUpdate(zoneID, recordSetID string, rs *vinyldns.RecordSet) (*vinyldns.RecordSetUpdateResponse, error) {
-	return nil, nil
+func (m *mockVinyldnsZoneInterface) RecordSet(zoneID, recordSet string) (vinyldns.RecordSet, error) {
+	args := m.Called(zoneID, recordSet)
+	var r0 vinyldns.RecordSet
+
+	if args.Get(0) != nil {
+		r0 = args.Get(0).(vinyldns.RecordSet)
+	}
+
+	return r0, args.Error(1)
 }
 
-func (_m *mockVinylDNSServiceInterface) RecordSetDelete(zoneID, recordSetID string) (*vinyldns.RecordSetUpdateResponse, error) {
-	return nil, nil
+func (m *mockVinyldnsZoneInterface) RecordSets(id string) ([]vinyldns.RecordSet, error) {
+	args := m.Called(id)
+	var r0 []vinyldns.RecordSet
+
+	if args.Get(0) != nil {
+		r0 = args.Get(0).([]vinyldns.RecordSet)
+	}
+
+	return r0, args.Error(1)
+}
+
+func (m *mockVinyldnsZoneInterface) RecordSetCreate(rs *vinyldns.RecordSet) (*vinyldns.RecordSetUpdateResponse, error) {
+	args := m.Called(rs)
+	var r0 *vinyldns.RecordSetUpdateResponse
+
+	if args.Get(0) != nil {
+		r0 = args.Get(0).(*vinyldns.RecordSetUpdateResponse)
+	}
+
+	return r0, args.Error(1)
+}
+
+func (m *mockVinyldnsZoneInterface) RecordSetUpdate(rs *vinyldns.RecordSet) (*vinyldns.RecordSetUpdateResponse, error) {
+	args := m.Called(rs)
+	var r0 *vinyldns.RecordSetUpdateResponse
+
+	if args.Get(0) != nil {
+		r0 = args.Get(0).(*vinyldns.RecordSetUpdateResponse)
+	}
+
+	return r0, args.Error(1)
+}
+
+func (m *mockVinyldnsZoneInterface) RecordSetDelete(zoneID, recordSetID string) (*vinyldns.RecordSetUpdateResponse, error) {
+	args := m.Called(zoneID, recordSetID)
+	var r0 *vinyldns.RecordSetUpdateResponse
+
+	if args.Get(0) != nil {
+		r0 = args.Get(0).(*vinyldns.RecordSetUpdateResponse)
+	}
+
+	return r0, args.Error(1)
 }

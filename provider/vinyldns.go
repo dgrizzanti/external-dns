@@ -17,6 +17,7 @@ limitations under the License.
 package provider
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -39,15 +40,15 @@ type vinyldnsZoneInterface interface {
 	Zones() ([]vinyldns.Zone, error)
 	RecordSets(id string) ([]vinyldns.RecordSet, error)
 	RecordSet(zoneID, recordSetID string) (vinyldns.RecordSet, error)
-	RecordSetCreate(zoneID string, rs *vinyldns.RecordSet) (*vinyldns.RecordSetUpdateResponse, error)
-	RecordSetUpdate(zoneID, recordSetID string, rs *vinyldns.RecordSet) (*vinyldns.RecordSetUpdateResponse, error)
+	RecordSetCreate(rs *vinyldns.RecordSet) (*vinyldns.RecordSetUpdateResponse, error)
+	RecordSetUpdate(rs *vinyldns.RecordSet) (*vinyldns.RecordSetUpdateResponse, error)
 	RecordSetDelete(zoneID, recordSetID string) (*vinyldns.RecordSetUpdateResponse, error)
 }
 
 type vinyldnsProvider struct {
 	client     vinyldnsZoneInterface
-	dryRun     bool
 	zoneFilter ZoneIDFilter
+	dryRun     bool
 }
 
 type vinyldnsChange struct {
@@ -55,7 +56,7 @@ type vinyldnsChange struct {
 	ResourceRecordSet vinyldns.RecordSet
 }
 
-// NewVinylDNSProvider does blah
+// NewVinylDNSProvider provides support for VinylDNS records
 func NewVinylDNSProvider(zoneFilter ZoneIDFilter, dryRun bool) (Provider, error) {
 	_, ok := os.LookupEnv("VINYLDNS_ACCESS_KEY")
 	if !ok {
@@ -64,12 +65,11 @@ func NewVinylDNSProvider(zoneFilter ZoneIDFilter, dryRun bool) (Provider, error)
 
 	client := vinyldns.NewClientFromEnv()
 
-	provider := &vinyldnsProvider{
+	return &vinyldnsProvider{
 		client:     client,
 		dryRun:     dryRun,
 		zoneFilter: zoneFilter,
-	}
-	return provider, nil
+	}, nil
 }
 
 func (p *vinyldnsProvider) Records() (endpoints []*endpoint.Endpoint, _ error) {
@@ -93,11 +93,13 @@ func (p *vinyldnsProvider) Records() (endpoints []*endpoint.Endpoint, _ error) {
 				recordsCount := len(r.Records)
 				log.Debugf(fmt.Sprintf("%s.%s.%d.%s", r.Name, r.Type, recordsCount, zone.Name))
 
-				//TODO: A and AAAA Records
+				//TODO: AAAA Records
 				if len(r.Records) > 0 {
 					targets := make([]string, len(r.Records))
 					for idx, rr := range r.Records {
 						switch r.Type {
+						case "A":
+							targets[idx] = rr.Address
 						case "CNAME":
 							targets[idx] = rr.CName
 						case "TXT":
@@ -154,7 +156,7 @@ func (p *vinyldnsProvider) submitChanges(changes []*vinyldnsChange) error {
 		if !p.dryRun {
 			switch change.Action {
 			case vinyldnsCreate:
-				_, err := p.client.RecordSetCreate(zone.ID, &change.ResourceRecordSet)
+				_, err := p.client.RecordSetCreate(&change.ResourceRecordSet)
 				if err != nil {
 					return err
 				}
@@ -164,7 +166,7 @@ func (p *vinyldnsProvider) submitChanges(changes []*vinyldnsChange) error {
 					return err
 				}
 				change.ResourceRecordSet.ID = recordID
-				_, err = p.client.RecordSetUpdate(zone.ID, recordID, &change.ResourceRecordSet)
+				_, err = p.client.RecordSetUpdate(&change.ResourceRecordSet)
 				if err != nil {
 					return err
 				}
@@ -199,7 +201,7 @@ func (p *vinyldnsProvider) findRecordSetID(zoneID string, recordSetName string) 
 	return "", fmt.Errorf("Record not found")
 }
 
-func (p *vinyldnsProvider) ApplyChanges(changes *plan.Changes) error {
+func (p *vinyldnsProvider) ApplyChanges(ctx context.Context, changes *plan.Changes) error {
 	combinedChanges := make([]*vinyldnsChange, 0, len(changes.Create)+len(changes.UpdateNew)+len(changes.Delete))
 
 	combinedChanges = append(combinedChanges, newVinylDNSChanges(vinyldnsCreate, changes.Create)...)
@@ -228,7 +230,7 @@ func newVinylDNSChange(action string, endpoint *endpoint.Endpoint) *vinyldnsChan
 
 	records := []vinyldns.Record{}
 
-	// TODO: A and AAAA
+	// TODO: AAAA
 	if endpoint.RecordType == "CNAME" {
 		records = []vinyldns.Record{
 			{
@@ -239,6 +241,12 @@ func newVinylDNSChange(action string, endpoint *endpoint.Endpoint) *vinyldnsChan
 		records = []vinyldns.Record{
 			{
 				Text: endpoint.Targets[0],
+			},
+		}
+	} else if endpoint.RecordType == "A" {
+		records = []vinyldns.Record{
+			{
+				Address: endpoint.Targets[0],
 			},
 		}
 	}

@@ -30,6 +30,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -490,6 +491,12 @@ func (sc *serviceSource) extractNodePortTargets(svc *v1.Service) (endpoint.Targe
 	default:
 		nodes, err = sc.nodeInformer.Lister().List(labels.Everything())
 		if err != nil {
+			log.Infof("Unable to list nodes (Forbidden), returning empty list of targets (NodePort services will be skipped)")
+			if errors.IsForbidden(err) {
+				// Return an empty list because it makes sense to continue and try other sources.
+				log.Debugf("Unable to list nodes (Forbidden), returning empty list of targets (NodePort services will be skipped)")
+				return endpoint.Targets{}, nil
+			}
 			return nil, err
 		}
 	}
