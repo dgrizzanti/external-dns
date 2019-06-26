@@ -17,11 +17,15 @@ limitations under the License.
 package provider
 
 import (
+	"context"
+	"fmt"
+	"os"
 	"testing"
 
+	"github.com/kubernetes-incubator/external-dns/endpoint"
+	"github.com/kubernetes-incubator/external-dns/plan"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 	"github.com/vinyldns/go-vinyldns/vinyldns"
 )
 
@@ -38,57 +42,109 @@ var vinylDNSRecordSetUpdateResponse *vinyldns.RecordSetUpdateResponse
 func TestVinylDNSServices(t *testing.T) {
 	firstZone := vinyldns.Zone{
 		ID:   "0",
-		Name: "example.com",
+		Name: "example.com.",
 	}
 	secondZone := vinyldns.Zone{
 		ID:   "1",
-		Name: "example-beta.com",
+		Name: "example-beta.com.",
 	}
 	vinylDNSZones = []vinyldns.Zone{firstZone, secondZone}
 
 	firstRecord := vinyldns.RecordSet{
-		ID:     "1",
-		ZoneID: "example.com",
-		Name:   "example",
-		TTL:    3600,
+		ZoneID: "0",
+		Name:   "example.com.",
+		TTL:    300,
 		Type:   "CNAME",
+		Records: []vinyldns.Record{
+			{
+				CName: "vinyldns.com",
+			},
+		},
 	}
 	vinylDNSRecords = []vinyldns.RecordSet{firstRecord}
 
+	vinylDNSRecordSetUpdateResponse = &vinyldns.RecordSetUpdateResponse{
+		Zone:      firstZone,
+		RecordSet: firstRecord,
+		ChangeID:  "123",
+		Status:    "Active",
+	}
+
 	mockVinylDNS := &mockVinyldnsZoneInterface{}
 	mockVinylDNS.On("Zones").Return(vinylDNSZones, nil)
-	mockVinylDNS.On("RecordSets").Return(vinylDNSRecords, nil)
+	mockVinylDNS.On("RecordSets", "0").Return(vinylDNSRecords, nil)
+	mockVinylDNS.On("RecordSets", "1").Return(nil, nil)
+	mockVinylDNS.On("RecordSets", "2").Return(nil, fmt.Errorf("Record not found"))
+	mockVinylDNS.On("RecordSetCreate", &firstRecord).Return(vinylDNSRecordSetUpdateResponse, nil)
+	mockVinylDNS.On("RecordSetUpdate", &firstRecord).Return(vinylDNSRecordSetUpdateResponse, nil)
+	mockVinylDNS.On("RecordSetDelete", "0", "").Return(nil, nil)
 
 	mockVinylDNSProvider = vinyldnsProvider{client: mockVinylDNS}
 
 	// Run tests on mock services
-	t.Run("Zones", testVinylDNSProviderZones)
 	t.Run("Records", testVinylDNSProviderRecords)
-	// t.Run("ApplyChanges", testDnsimpleProviderApplyChanges)
-	// t.Run("ApplyChanges/SkipUnknownZone", testDnsimpleProviderApplyChangesSkipsUnknown)
-	// t.Run("SuitableZone", testDnsimpleSuitableZone)
-	// t.Run("GetRecordID", testDnsimpleGetRecordID
-}
-
-func testVinylDNSProviderZones(t *testing.T) {
-	result, err := mockVinylDNSProvider.client.Zones()
-	assert.Nil(t, err)
-	validateVinylDNSZones(t, result, vinylDNSZones)
+	t.Run("ApplyChanges", testVinylDNSProviderApplyChanges)
+	t.Run("SuitableZone", testVinylDNSSuitableZone)
+	t.Run("GetRecordID", testVinylDNSFindRecordSetID)
 }
 
 func testVinylDNSProviderRecords(t *testing.T) {
-	mockVinylDNSProvider.zoneFilter = NewZoneIDFilter([]string{"1"})
+	mockVinylDNSProvider.zoneFilter = NewZoneIDFilter([]string{"0"})
 	result, err := mockVinylDNSProvider.Records()
 	assert.Nil(t, err)
 	assert.Equal(t, len(vinylDNSRecords), len(result))
+
+	mockVinylDNSProvider.zoneFilter = NewZoneIDFilter([]string{"1"})
+	result, err = mockVinylDNSProvider.Records()
+	assert.Nil(t, err)
+	assert.Equal(t, 0, len(result))
 }
 
-func validateVinylDNSZones(t *testing.T, zones []vinyldns.Zone, expected []vinyldns.Zone) {
-	require.Len(t, zones, len(expected))
-
-	for i, v := range expected {
-		assert.Equal(t, zones[i].Name, v.Name)
+func testVinylDNSProviderApplyChanges(t *testing.T) {
+	changes := &plan.Changes{}
+	changes.Create = []*endpoint.Endpoint{
+		{DNSName: "example.com", Targets: endpoint.Targets{"vinyldns.com"}, RecordType: endpoint.RecordTypeCNAME},
 	}
+	changes.UpdateNew = []*endpoint.Endpoint{
+		{DNSName: "example.com", Targets: endpoint.Targets{"vinyldns.com"}, RecordType: endpoint.RecordTypeCNAME},
+	}
+	changes.Delete = []*endpoint.Endpoint{{DNSName: "example.com", Targets: endpoint.Targets{"vinyldns.com"}, RecordType: endpoint.RecordTypeCNAME}}
+
+	mockVinylDNSProvider.zoneFilter = NewZoneIDFilter([]string{"1"})
+	err := mockVinylDNSProvider.ApplyChanges(context.Background(), changes)
+	if err != nil {
+		t.Errorf("Failed to apply changes: %v", err)
+	}
+}
+
+func testVinylDNSSuitableZone(t *testing.T) {
+	mockVinylDNSProvider.zoneFilter = NewZoneIDFilter([]string{"0"})
+
+	zone := vinyldnsSuitableZone("example.com", vinylDNSZones)
+	assert.Equal(t, zone.Name, "example.com.")
+}
+
+func TestNewVinylDNSProvider(t *testing.T) {
+	os.Setenv("VINYLDNS_ACCESS_KEY", "xxxxxxxxxxxxxxxxxxxxxxxxxx")
+	_, err := NewVinylDNSProvider(NewZoneIDFilter([]string{"example.com"}), true)
+	assert.Nil(t, err)
+
+	os.Unsetenv("VINYLDNS_ACCESS_KEY")
+	_, err = NewVinylDNSProvider(NewZoneIDFilter([]string{"example.com"}), true)
+	assert.NotNil(t, err)
+	if err == nil {
+		t.Errorf("Expected to fail new provider on empty token")
+	}
+}
+
+func testVinylDNSFindRecordSetID(t *testing.T) {
+	mockVinylDNSProvider.zoneFilter = NewZoneIDFilter([]string{"0"})
+	result, err := mockVinylDNSProvider.findRecordSetID("0", "example.com.")
+	assert.Nil(t, err)
+	assert.Equal(t, "", result)
+
+	result, err = mockVinylDNSProvider.findRecordSetID("2", "example-beta")
+	assert.NotNil(t, err)
 }
 
 func (m *mockVinyldnsZoneInterface) Zones() ([]vinyldns.Zone, error) {
