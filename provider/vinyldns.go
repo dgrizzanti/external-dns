@@ -83,6 +83,7 @@ func (p *vinyldnsProvider) Records() (endpoints []*endpoint.Endpoint, _ error) {
 			continue
 		}
 
+		log.Infof(fmt.Sprintf("Zone: [%s]", zone.Name))
 		records, err := p.client.RecordSets(zone.ID)
 		if err != nil {
 			return nil, err
